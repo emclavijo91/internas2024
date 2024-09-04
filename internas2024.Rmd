@@ -1,0 +1,194 @@
+---
+title: "Resultados de Elecciones Internas 2024"
+author: 
+  
+  - Realizado por Emiliano Clavijo (Universidad de la República, Uruguay)
+date: '2024-09-04'
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    theme: journal
+---
+
+```{r setup, include=FALSE}
+
+#Procedimientos preliminares: Se instalan (si no se cuentan con ellos) y cargan librerías a utilizar durante el ejercicio (`ggplot2` y `tidyverse`)
+
+library(dplyr) # para el agrupamiento de datos
+library(tidyverse) # apoya la visualización y manipulacion de datos
+library(readr) # para leer .csv
+library(sf) # para tomar base de departamentos en shapefile
+library(ggplot2) # para graficar mapa
+library(viridis)  # Para la paleta de colores
+library(scales) # para percentiles, quintiles, deciles
+
+options(scipen = 20) #elude potenciales notaciones cientificas en futuras salidas
+
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, comment = "") #elimina mensajes, advertencias y comentarios de salida de código, respectivamente
+
+```
+
+## Trabajo con geocodificación aplicada a resultados electorales
+
+Se procede a cargar la base de series con la asistencia de la librería "sf". Trabajamos con shapefile, porque la descarga de .csv presenta complejidades en el trazado del mapa. Los archivos pueden descargarse a partir del acceso al visualizador catrográfico de IDE que contiene capas diseñadas en acuerdo con la Corte Electoral: https://www.gub.uy/corte-electoral/datos-y-estadisticas/datos/visualizador-cartografia-digital
+
+```{r}
+library(sf)
+shapefile_path <- "geogr/series_electorales_20240523.shp"
+uruguay_shp <- st_read(shapefile_path)
+
+```
+Se traza el mapa a utilizar para su verificación de que las salidas serán consistentes en su trazado.
+
+```{r}
+head(uruguay_shp)
+ggplot(uruguay_shp)+
+  geom_sf()
+```
+Luego, vamos a cargar los votos de las EI2024
+  Fuente: Corte Electoral
+
+```{r}
+# Votos
+
+download.file("https://catalogodatos.gub.uy/dataset/48a4e7f5-6909-41a0-aa8a-95dc42cc201f/resource/dec32eb5-1754-4810-af7a-8c1121259206/download/desglose-de-votos.csv", destfile = "desglose_de_votos.csv")
+
+# Leer el archivo CSV con los votos
+desglose_votos <- read.csv("desglose_de_votos.csv")
+```
+Llamamos en los df de interés a Serie de la misma forma. Esto va a permitir mergear ubicación con series y votos.
+
+```{r}
+# Renombrar la columna en uruguay_shp si es necesario
+colnames(uruguay_shp)[colnames(uruguay_shp) == "serie"] <- "Serie"
+
+# Renombrar la columna en desglose_votos si es necesario
+colnames(desglose_votos)[colnames(desglose_votos) == "SERIES"] <- "Serie"
+
+```
+
+Ahora, mergeamos.
+
+```{r}
+
+# Luego unir el resultado con desglose_votos
+internas2024 <- merge(uruguay_shp, desglose_votos, by = "Serie")
+
+```
+
+Vemos estructura de la base mergeada.
+
+```{r}
+
+head(internas2024)
+
+```
+
+## Ejemplo: distribución de votos de Cabildo Abierto al ODN por serie 
+
+Se inicia el ejercicio con el filtrado de los votos por serie electoral al ODN de Cabildo Abierto.
+
+```{r}
+# Filtramos los datos para lema "CABILDO ABIERTO" y votos al Organo Deliberativo Nacional "HOJA_ODN"
+cabildo_abierto_odn <- internas2024 %>%
+  filter(LEMA == "CABILDO ABIERTO" & TIPO_REGISTRO == "HOJA_ODN")
+```
+
+Ahora, hay que agrupar los votos por serie y sumarlos:
+
+```{r}
+# Agrupamos por Serie y Departamento y sumar los votos
+votos_por_serie_cabildo <- cabildo_abierto_odn %>%
+  group_by(Serie, DEPARTAMENTO) %>%
+  summarise(votos_totales = sum(CANTIDAD_VOTOS, na.rm = TRUE))
+
+# Resultado
+head(votos_por_serie_cabildo)
+```
+Veamos las diez series con más votos obtenidos por el Lema Cabildo Abierto.
+
+```{r}
+# Ordeno por votos_totales en orden descendente y se muestran los 10 valores máximos
+top_10_votos_CA_INT_2024 <- votos_por_serie_cabildo %>%
+  arrange(desc(votos_totales)) %>%
+  head(10)
+
+# Resultado
+print(top_10_votos_CA_INT_2024)
+```
+
+Grafiquemos un mapa coroplético. Varias opciones:
+
+1. Mapeo estándar con coloreo de transición lineal
+```{r}
+mapa_coropletico <- ggplot(votos_por_serie_cabildo) +
+  geom_sf(aes(fill = votos_totales), color = NA) +
+  scale_fill_viridis_c(option = "plasma", na.value = "white", 
+                       breaks = scales::pretty_breaks(n = 5)) +  # Genera cortes lineales
+  theme_minimal() +
+  labs(title = "Distribución de Votos del lema Cabildo Abierto al ODN por serie",
+       fill = "Votos Totales")
+
+# Guardar el mapa como archivo PNG
+ggsave("mapa_coropletico.png", plot = mapa_coropletico, width = 10, height = 8, dpi = 300)
+```
+
+![](mapa_coropletico.png)
+
+
+2. Colores con transición logaritmica
+
+```{r}
+mapa_coropletico_2 <- ggplot(votos_por_serie_cabildo) +
+  geom_sf(aes(fill = votos_totales), color = NA) +
+  scale_fill_viridis_c(option = "plasma", na.value = "white", 
+                       trans = "log", 
+                       breaks = scales::trans_breaks("log", function(x) 10^x),
+                       labels = scales::trans_format("log", scales::math_format(10^.x))) +
+  theme_minimal() +
+  labs(title = "Distribución de Votos del lema Cabildo Abierto al ODN por serie",
+       fill = "Votos Totales")
+ggsave("mapa_coropletico_2.png", plot = mapa_coropletico_2, width = 10, height = 8, dpi = 300)
+
+```
+
+![](mapa_coropletico_2.png)
+
+
+En vez de asumir una transición lineal, asumimos una logarítmica para priorizar la diferenciación entre valores más pequeños, porque consideramos que las pequeñas diferencias en esos rangos son importantes para la interpretación de los datos. Esto puede ser particularmente útil cuando los datos están sesgados hacia valores bajos o cuando las diferencias proporcionales son más relevantes que las diferencias absolutas.
+
+3. Ajuste por rangos
+
+```{r}
+library(scales)  # Necesario para pretty_breaks
+
+# Calcular los quintiles
+min_votos <- quantile(votos_por_serie_cabildo$votos_totales, 0.2, na.rm = TRUE)  # Percentil 20
+max_votos <- max(votos_por_serie_cabildo$votos_totales, na.rm = TRUE)  # Valor máximo de votos
+
+# Crear el mapa coroplético
+mapa_coropletico_3 <- ggplot(votos_por_serie_cabildo) +
+  geom_sf(aes(fill = votos_totales), color = NA) +
+  scale_fill_viridis_c(option = "plasma", na.value = "white", 
+                       limits = c(min_votos, max_votos),  # Establece los límites en la escala de colores
+                       breaks = pretty_breaks(n = 5)) +   # Crea cinco cortes de manera automática
+  theme_minimal() +
+  labs(title = "Distribución de Votos del lema Cabildo Abierto al ODN por serie",
+       fill = "Votos Totales")
+
+# Guardar el gráfico como archivo PNG
+ggsave("mapa_coropletico_3.png", plot = mapa_coropletico_3, width = 10, height = 8, dpi = 300)
+
+```
+
+![](mapa_coropletico_3.png)
+
+En este caso, el rango de colores (viridis - opción "plasma") utiliza una paleta de colores "plasma" de la librería viridis, que pasa de tonos de púrpura y azul a tonos de amarillo:
+
+Tonos más claros (amarillos) representan áreas con un mayor número de votos.
+Tonos más oscuros (púrpuras y azules) representan áreas con un menor número de votos.
+Áreas en blanco representan zonas con datos faltantes o donde los votos están por debajo del percentil 20 (tratando de limpiar visualmente las series con bajos registros de votos).
+
+
+Con independencia del procedimiento de mapeo seleccionado, se evidencia que las zonas urbanas presentan la mayor presencia de votos de CA. Fundamentalmente, departamentos como Artigas, Cerro Largo, Rivera, Soriano, Río Negro, así como al NE de la capital.
